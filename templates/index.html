@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html>
+  
+  <head>
+    <title>Event Locations</title>
+    <link rel="shortcut icon" href="{{ url_for('static', filename='favicon/favicon-96x96.png') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.css"/>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster/dist/MarkerCluster.Default.css"/>
+    <link href="https://fonts.googleapis.com/css2?family=Lexend+Deca:wght@400&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    
+  </head>
+  
+  <body>
+    
+    <div class="left-container">
+      <div class="input-box">
+        <h3>Search Events In Your City!</h3>
+        <input id="userAddress" type="text" placeholder="Enter your address">
+        <button id="addLocationButton">Add My Location</button>
+        <input id="city" type="text" placeholder="Enter city or postal code">
+        <input id="startDate" type="date" placeholder="Start date">
+        <input id="endDate" type="date" placeholder="End date">
+        <input id="keyword" type="text" placeholder="Artist, Event, Venue">
+        <button id="searchButton">Search Events!</button>
+        <button id="resetButton">Reset Search</button>
+        <button id="exportButton">Export to XLSX</button>
+      </div>
+      
+      <div class="event-list-box hidden">
+        <h3 class="event-list-title">Events Found</h3>
+        <div id="eventList" class="event-list"></div>
+      </div>
+    </div>
+    
+    <div id="map"></div>
+
+    <div class="right-container">
+      <div class="chat-input-box">
+        <h3>Ask About The Artists</h3>
+        <textarea id="userInput" placeholder="Ask a question..."></textarea>
+        <button id="sendButton">Send</button>
+        <button id="clearChatButton" onclick="clearChat()">Clear Chat</button>
+      </div>
+      
+      <div class="chat-messages-box hidden">
+        <div id="chatMessages" class="chat-messages"></div>
+      </div>
+    </div>
+ 
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.17.0/xlsx.full.min.js"></script>
+       
+    <script>
+      let userMarker;
+      document.addEventListener('DOMContentLoaded', function() {
+        var apiKey = '{{ api_key }}';
+        var defaultLat = {{ latitude }};
+        var defaultLon = {{ longitude }};
+        var map;
+        let userLat, userLon;
+
+        function addUserMarker(lat, lon, address) {
+          userLat = lat;
+          userLon = lon;
+
+          // Remove existing user marker if it exists
+          if (userMarker) {
+            map.removeLayer(userMarker);
+          }
+
+          // Create a custom icon for the user's location
+          var userIcon = L.icon({
+            iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-red.png',
+            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+            iconSize: [25, 41],
+            iconAnchor: [12, 41],
+            popupAnchor: [1, -34],
+            shadowSize: [41, 41]
+          });
+
+          // Create a marker with the custom icon
+          var userMarker = L.marker([lat, lon], {icon: userIcon})
+            .addTo(map)
+            .bindPopup("Your Location: " + address);
+
+          // Center the map on the user's location
+          map.setView([lat, lon], 13);
+        }
+
+        //////// NEW ///////
+
+        function calculateDistance(lat1, lon1, lat2, lon2) {
+          const R = 6371; // Radius of the Earth in km
+          const dLat = (lat2 - lat1) * Math.PI / 180;
+          const dLon = (lon2 - lon1) * Math.PI / 180;
+          const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+                    Math.sin(dLon/2) * Math.sin(dLon/2);
+          const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+          const distance = R * c; // Distance in km
+          return Math.round(distance * 10) / 10; // Round to 1 decimal place
+        }
+
+        // Initialize map after a short delay to ensure the container is ready
+        setTimeout(function() {
+          map = L.map('map', {
+            zoomControl: false  // This line disables the zoom control
+          }).setView([defaultLat, defaultLon], 10);
+          
+          L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+              attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+              maxZoom: 19
+          }).addTo(map);
+          
+          map.invalidateSize();
+        }, 100);
+
+        // Reset button functionality
+        const resetButton = document.getElementById('resetButton');
+        resetButton.addEventListener('click', resetAll);
+
+        function resetAll() {
+          // Clear input fields
+          document.getElementById("userAddress").value = '';
+          document.getElementById("city").value = '';
+          document.getElementById("startDate").value = '';
+          document.getElementById("endDate").value = '';
+          document.getElementById("keyword").value = '';
+
+          // Clear event list
+          document.getElementById('eventList').innerHTML = '';
+          document.querySelector('.event-list-title').style.display = 'none';
+
+          // Clear map markers and popups
+          if (map) {
+            map.eachLayer(function (layer) {
+              if (layer instanceof L.MarkerClusterGroup || layer instanceof L.Marker) {
+                map.removeLayer(layer);
+              }
+            });
+            map.closePopup(); // Close any open popups
+          }
+
+          // Reset map view to default
+          if (map) {
+            map.setView([defaultLat, defaultLon], 10);
+          }
+
+          // Clear local storage
+          localStorage.removeItem("events");
+
+          // Reset user location
+          userLat = undefined;
+          userLon = undefined;
+
+          // Remove user marker if it exists
+          if (userMarker) {
+            map.removeLayer(userMarker);
+            userMarker = null;
+          }
+
+          console.log("Reset completed");
+
+          // Clear and hide the event list box
+          var eventListBox = document.querySelector('.event-list-box');
+          document.getElementById('eventList').innerHTML = '';
+          eventListBox.classList.add('hidden');
+
+          // Clear and hide the chat messages box
+          // clearChat();
+
+          console.log("Reset completed");
+        }
+
+        document.getElementById("searchButton").addEventListener("click", function() {
+          var city = document.getElementById("city").value;
+          var startDate = document.getElementById("startDate").value;
+          var endDate = document.getElementById("endDate").value;
+          var keyword = document.getElementById("keyword").value;
+
+          if (!city || !startDate || !endDate) {
+            document.querySelector('.event-list-title').style.display = 'none';
+            alert("Please fill in all fields");
+            return;          
+          }
+
+          // Fetch latitude and longitude using city or postal code
+          fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(city)}`)
+            .then(response => response.json())
+            .then(data => {
+              if (data.length > 0) {
+                var lat = data[0].lat;
+                var lon = data[0].lon;
+                searchEvents(keyword, startDate, endDate, lat, lon);
+              } else {
+                alert("Location not found");
+              }
+            }).catch(error => console.error("Error fetching location:", error));
+        });
+
+        function searchEvents(keyword, startDate, endDate, lat, lon) {
+          startDate += 'T00:00:00Z';
+          endDate += 'T23:59:59Z';
+          var url = `https://app.ticketmaster.com/discovery/v2/events.json?apikey=${apiKey}&keyword=${keyword}&latlong=${lat},${lon}&startDateTime=${startDate}&endDateTime=${endDate}&radius=50&size=20`;
+
+          fetch(url)
+            .then(response => response.json())
+            .then(data => {
+              if (data._embedded && data._embedded.events) {
+                var events = data._embedded.events.map(event => {
+                  var venue = event._embedded.venues[0];
+                  return {
+                    name: event.name,
+                    date: event.dates.start.localDate,
+                    time: event.dates.start.localTime ? event.dates.start.localTime.slice(0, 5) : '',
+                    city: venue.city.name,
+                    address: venue.address.line1,
+                    url: event.url,
+                    image_url: event.images[1] ? event.images[1].url : '',
+                    lat: parseFloat(venue.location.latitude),
+                    lon: parseFloat(venue.location.longitude),
+                    venue: venue.name,
+                    segment: event.classifications && event.classifications[0] && event.classifications[0].segment ? event.classifications[0].segment.name : 'Not Available',
+                    genre: event.classifications && event.classifications[0] && event.classifications[0].genre ? event.classifications[0].genre.name : 'Not Available',
+                    subgenre: event.classifications && event.classifications[0] && event.classifications[0].subGenre ? event.classifications[0].subGenre.name : 'Not Available',
+                    priceRanges: event.priceRanges ? event.priceRanges : []
+                  };
+                });
+
+                // Remove duplicate events
+                events = removeDuplicateEvents(events);
+                
+                // Sort events before storing and displaying
+                events = sortEventsByDateTime(events);
+                
+                displayEvents(events);
+                console.log('displayEvents called with', events);
+                localStorage.setItem("events", JSON.stringify(events)); // Store events in local storage
+                console.log("Events stored:", events); // Debug log
+              } else {
+                alert("No events found");
+              }
+            }).catch(error => console.error("Error fetching events:", error));
+        }
+
+        function removeDuplicateEvents(events) {
+          const uniqueEvents = [];
+          const seenEvents = new Set();
+        
+          for (const event of events) {
+            const eventKey = `${event.name}|${event.date}|${event.time}|${event.venue}`;
+            if (!seenEvents.has(eventKey)) {
+              seenEvents.add(eventKey);
+              uniqueEvents.push(event);
+            }
+          }
+        
+          return uniqueEvents;
+        }
+        
+        function formatTime(timeString) {
+          if (!timeString) return '';
+          
+          const [hours, minutes] = timeString.split(':');
+          let hour = parseInt(hours, 10);
+          const ampm = hour >= 12 ? 'PM' : 'AM';
+          
+          hour = hour % 12;
+          hour = hour ? hour : 12; // the hour '0' should be '12'
+          
+          return `${hour}:${minutes}${ampm}`;
+        }
+
+
+        document.getElementById("exportButton").addEventListener("click", function() {
+          console.log("Export button clicked");
+          exportToExcel();
+        });
+
+        function exportToExcel() {
+          console.log("Starting export process...");
+          var events = JSON.parse(localStorage.getItem("events"));
+          console.log("Retrieved events:", events);
+        
+          if (!events || events.length === 0) {
+            alert("No events to export");
+            console.log("No events in local storage");
+            return;
+          }
+
+          // Sort events by date
+          events = sortEventsByDateTime(events);
+        
+          console.log("Formatting events...");
+          var formattedEvents = events.map(event => ({
+            Name: event.name,
+            Date: event.date,
+            Time: formatTime(event.time),
+            City: event.city,
+            Address: event.address,
+            Venue: event.venue,
+            Segment: event.segment,
+            Genre: event.genre,
+            Subgenre: event.subgenre,
+            PriceRange: formatPriceRange(event.priceRanges),
+            URL: event.url
+          }));
+          console.log("Formatted events:", formattedEvents);
+        
+          console.log("Creating worksheet...");
+          var ws = XLSX.utils.json_to_sheet(formattedEvents);
+        
+          console.log("Creating workbook...");
+          var wb = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb, ws, "Events");
+        
+          console.log("Generating Excel file...");
+          var wbout = XLSX.write(wb, {bookType:'xlsx', type: 'binary'});
+        
+          console.log("Creating blob...");
+          var blob = new Blob([s2ab(wbout)], {type:"application/octet-stream"});
+        
+          console.log("Triggering download...");
+          var fileName = 'events_export.xlsx';
+          downloadExcel(blob, fileName);
+        
+          console.log("Export process completed.");
+        }
+        
+
+        // Helper function to format price range
+        function formatPriceRange(priceRanges) {
+          if (priceRanges && priceRanges.length > 0) {
+            return `${priceRanges[0].min} - ${priceRanges[0].max} ${priceRanges[0].currency}`;
+          }
+          return 'Price information not available';
+        }
+
+        // Helper function to convert string to ArrayBuffer
+        function s2ab(s) { 
+          var buf = new ArrayBuffer(s.length); 
+          var view = new Uint8Array(buf);  
+          for (var i=0; i!=s.length; ++i) view[i] = s.charCodeAt(i) & 0xFF; 
+          return buf;    
+        }
+
+        // Helper function to download Excel file
+        function downloadExcel(blob, fileName) {
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = fileName;
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }
+
+        function sortEventsByDateTime(events) {
+          return events.sort((a, b) => {
+            const dateA = new Date(a.date + 'T' + (a.time || '00:00'));
+            const dateB = new Date(b.date + 'T' + (b.time || '00:00'));
+            return dateA - dateB;
+          });
+        }
+
+        // Add event listener for the new "Add My Location" button
+        document.getElementById("addLocationButton").addEventListener("click", addUserLocation);
+
+        // Function to add user location
+        function addUserLocation() {
+          var address = document.getElementById("userAddress").value;
+          if (!address) {
+            alert("Please enter your address");
+            return;
+          }
+
+          // Fetch latitude and longitude using the entered address
+          fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(address)}`)
+            .then(response => response.json())
+            .then(data => {
+              if (data.length > 0) {
+                var lat = parseFloat(data[0].lat);
+                var lon = parseFloat(data[0].lon);
+                addUserMarker(lat, lon, address);
+                
+                // Recalculate and redisplay events with distances
+                var events = JSON.parse(localStorage.getItem("events"));
+                if (events) {
+                  displayEvents(events);
+                }
+              } else {
+                alert("Location not found");
+              }
+            }).catch(error => console.error("Error fetching location:", error));
+        }
+
+        // Function to add user marker to the map
+
+        
+
+        /////// NEW //////
+
+        function displayEvents(events) {
+          var eventListBox = document.querySelector('.event-list-box');
+          var eventList = document.getElementById('eventList');
+          var eventListTitle = document.querySelector('.event-list-title');
+        
+          // Clear existing markers and event list
+          map.eachLayer(function (layer) {
+            if (layer instanceof L.MarkerClusterGroup) {
+              map.removeLayer(layer);
+            }
+          });
+          eventList.innerHTML = '';
+        
+          if (events && events.length > 0) {
+            // Sort events by date
+            events = sortEventsByDateTime(events);
+        
+            var markers = L.markerClusterGroup();
+            var eventListHtml = '';
+          
+            events.forEach(function(event) {
+              var priceRangeText = event.priceRanges.length > 0 
+                ? `${event.priceRanges[0].min} - ${event.priceRanges[0].max} ${event.priceRanges[0].currency}`
+                : 'Price information not available';
+        
+              // Calculate distance if user location is available
+              let distanceText = '';
+              if (userLat !== undefined && userLon !== undefined) {
+                const distance = calculateDistance(userLat, userLon, event.lat, event.lon);
+                distanceText = `<p class="distance-text">Distance from you: ${distance} km</p>`;
+              }
+        
+              var popupContent = `<div class="event-popup">
+                                    <div class="event-popup-content">
+                                      <h2>${event.name}</h2>
+                                      ${distanceText}
+                                      <ul class="event-details-list">
+                                      <img class="responsive-img" src="${event.image_url}" alt="Event Image"/>
+                                      <li>Event Type: ${event.segment}</li>
+                                      <li>Genre/Subgenre: ${event.genre} / ${event.subgenre}</li>
+                                      <li>Location: ${event.venue}</li>
+                                      <li>Address: ${event.address}</li>
+                                      <li>Date: ${event.date}</li>
+                                      <li>Time: ${formatTime(event.time)}</li>
+                                      <li>Price Range: ${priceRangeText}</li>
+                                      </ul>
+                                      <a href="${event.url}" target="_blank">Buy Tickets</a>  
+                                    </div>
+                                  </div>`;
+              var marker = L.marker([event.lat, event.lon])
+                .bindPopup(popupContent);
+              markers.addLayer(marker);
+          
+              // Add event to sidebar list
+              eventListHtml += `
+                <div class="event-item">
+                  <h4>${event.name}</h4>
+                  ${distanceText}
+                  <div class="event-item-spacer"></div>
+                  <img src="${event.image_url}" alt="Event Image" class="event-image"/>
+                  <p>Event Type: ${event.segment}</p>
+                  <p>Genre/Subgenre: ${event.genre} / ${event.subgenre}</p>
+                  <p>Location: ${event.venue}</p>
+                  <p>Address: ${event.address}</p>
+                  <p>Date: ${event.date}</p>
+                  <p>Time: ${formatTime(event.time)}</p>
+                  <p>Price Range: ${priceRangeText}</p>
+                  <a href="${event.url}" target="_blank">Buy Tickets</a>
+                </div>
+              `;
+            });
+          
+            map.addLayer(markers);
+
+            // Update sidebar with event list and count
+            eventListTitle.textContent = `${events.length} Event${events.length === 1 ? '' : 's'} Found`;
+            eventList.innerHTML = eventListHtml;
+            
+            // Show the event list box and title
+            eventListBox.classList.remove('hidden');
+            eventListTitle.style.display = 'block';
+
+            console.log('Event list updated with', events.length, 'events');
+          } else {
+            // Hide the event list box and title if there are no events
+            eventListBox.classList.add('hidden');
+            eventListTitle.style.display = 'none';
+
+            console.log('No events to display, hiding event list');
+          }
+        }
+      });
+
+      document.addEventListener('DOMContentLoaded', function() {
+     
+        // Chat functionality
+        const chatMessages = document.getElementById('chatMessages');
+        const userInput = document.getElementById('userInput');
+        const sendButton = document.getElementById('sendButton');
+        const clearChatButton = document.getElementById('clearChatButton');
+      
+        sendButton.addEventListener('click', sendMessage);
+        clearChatButton.addEventListener('click', clearChat);
+
+      
+        function sendMessage() {
+          const message = userInput.value.trim();
+          const userAddress = document.getElementById("userAddress").value;
+          const city = document.getElementById("city").value;
+          
+          if (message) {
+              addMessageToChat('user', message);
+              userInput.value = '';
+              
+              fetch('/ask', {
+                  method: 'POST',
+                  headers: {
+                      'Content-Type': 'application/json',
+                  },
+                  body: JSON.stringify({ 
+                      message: message,
+                      userAddress: userAddress,
+                      city: city
+                  }),
+              })
+              .then(response => {
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                
+                let aiMessageElement = addMessageToChat('ai', '');
+                
+                function readStream() {
+                    return reader.read().then(({ done, value }) => {
+                        if (done) {
+                            return;
+                        }
+                        const chunk = decoder.decode(value);
+                        const lines = chunk.split('\n');
+                        lines.forEach(line => {
+                            if (line.startsWith('data: ')) {
+                                const content = line.slice(6);
+                                if (content) {
+                                    // Decode the content and convert 'emphasized text' to <em> tags
+                                    const decodedContent = content.replace(/\\n/g, '\n').replace(/\\r/g, '\r');
+                                    const formattedContent = decodedContent.replace(/'(.*?)'/g, '<em>$1</em>');
+                                    aiMessageElement.innerHTML += formattedContent;
+                                }
+                            }
+                        });
+                        chatMessages.scrollTop = chatMessages.scrollHeight;
+                        return readStream();
+                    });
+                }
+        
+                return readStream();
+            })
+              .catch((error) => {
+                  console.error('Error:', error);
+                  addMessageToChat('ai', 'Sorry, there was an error processing your request.');
+              });
+          }
+      }
+
+      window.addEventListener('load', function() {
+          // Clear all input fields
+          document.getElementById('userAddress').value = '';
+          document.getElementById('city').value = '';
+          document.getElementById('userInput').value = ''; // Assuming this is your chat input field
+          
+          // Clear the chat display area
+          document.getElementById('chatMessages').innerHTML = ''; // Assuming this is where chat messages are displayed
+          
+          // Send a request to the server to clear the session
+          fetch('/clear_session', {
+              method: 'POST',
+              headers: {
+                  'Content-Type': 'application/json',
+              }
+          })
+          .then(response => response.json())
+          .then(data => {
+              console.log('Session cleared:', data);
+          })
+          .catch((error) => {
+              console.error('Error:', error);
+          });
+      });
+      
+      function addMessageToChat(sender, message) {
+        var chatMessagesBox = document.querySelector('.chat-messages-box');
+        var chatMessages = document.getElementById('chatMessages');
+        
+        const messageElement = document.createElement('div');
+        messageElement.classList.add('message', sender + '-message');
+        
+        if (sender === 'user') {
+            messageElement.textContent = message;
+        } else {
+            // For AI messages, we'll set the content later
+            messageElement.innerHTML = '<div class="ai-message-content"></div>';
+        }
+        
+        chatMessages.appendChild(messageElement);
+        chatMessagesBox.classList.remove('hidden');
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    
+        return sender === 'ai' ? messageElement.querySelector('.ai-message-content') : messageElement;
+    }
+      
+    function clearChat() {
+      if (confirm("Are you sure you want to clear the chat history? This action cannot be undone.")) {
+        var chatMessagesBox = document.querySelector('.chat-messages-box');
+        var chatMessages = document.getElementById('chatMessages');
+        
+        // Clear all messages from the UI
+        chatMessages.innerHTML = '';
+        
+        // Hide the chat messages box
+        chatMessagesBox.classList.add('hidden');
+    
+        // Send a request to the server to clear the conversation history
+        fetch('/clear_chat', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                console.log('Chat history cleared on server');
+            } else {
+                console.error('Failed to clear chat history on server');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+        });
+      }   
+    }   
+    });
+
+    function clearAllData() {
+      // Clear all input fields
+      document.getElementById('userAddress').value = '';
+      document.getElementById('city').value = '';
+      document.getElementById('startDate').value = '';
+      document.getElementById('endDate').value = '';
+      document.getElementById('keyword').value = '';
+      
+      // Clear the chat display area (assuming you have one)
+      if (document.getElementById('chatMessages')) {
+          document.getElementById('chatMessages').innerHTML = '';
+      }
+        
+        // Clear any local storage (if you decide to use it in the future)
+        localStorage.clear();
+        
+        // Clear any session storage
+        sessionStorage.clear();
+        
+        // Send a request to the server to clear the session
+        fetch('/clear_session', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            console.log('Session cleared:', data);
+            // Optionally, add a message to the chat area
+            const chatMessages = document.getElementById('chatMessages');
+            const resetMessage = document.createElement('div');
+            resetMessage.textContent = 'Chat has been reset.';
+            resetMessage.className = 'system-message';
+            chatMessages.appendChild(resetMessage);
+        })
+        .catch((error) => {
+            console.error('Error:', error);
+        });
+    }
+    
+    // Call clearAllData when the page loads
+    window.addEventListener('load', clearAllData);
+    
+    // Optionally, you can also call clearAllData when the user manually refreshes
+    // This catches cases where the page is reloaded without a full navigation
+    window.addEventListener('beforeunload', function() {
+        // Note: This won't work for clearing server-side session due to timing,
+        // but it will clear client-side data
+        clearAllData();
+    });
+    
+    
+    </script>
+
+    <div class="signature" id="my-signature" data-testattr="signature">
+      Created by [Your Name] | <a href="https://yourportfolio.com" target="_blank">Portfolio</a>
+    </div>
+
+  </body>
+</html>
