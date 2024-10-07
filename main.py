@@ -25,11 +25,32 @@ Session(app)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 def get_location_from_ip():
-    response = requests.get("https://ipinfo.io")
-    data = response.json()
-    location = data['loc'].split(',')
-    latitude, longitude = location[0], location[1]
-    return latitude, longitude
+    # Try to get the client's IP address
+    if request.headers.get('X-Forwarded-For'):
+        client_ip = request.headers.get('X-Forwarded-For').split(',')[0]
+    else:
+        client_ip = request.remote_addr
+
+    # Use the client's IP to get location data
+    response = requests.get(f"https://ipinfo.io/{client_ip}/json")
+    if response.status_code == 200:
+        data = response.json()
+        location = data.get('loc', '').split(',')
+        if len(location) == 2:
+            latitude, longitude = location[0], location[1]
+            return latitude, longitude
+    
+    # Return None if unable to get location
+    return None, None
+
+# Example usage in a Flask route
+@app.route('/get_user_location')
+def get_user_location():
+    latitude, longitude = get_location_from_ip()
+    if latitude and longitude:
+        return f"User location: Latitude {latitude}, Longitude {longitude}"
+    else:
+        return "Unable to determine user location"
 
 @app.route('/')
 def index():
