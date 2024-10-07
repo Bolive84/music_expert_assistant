@@ -5,6 +5,10 @@ import requests
 from openai import OpenAI
 from config import OPENAI_API_KEY, TICKETMASTER_API_KEY
 from flask_cors import CORS
+import os
+from dotenv import load_dotenv
+
+load_dotenv() 
 
 app = Flask(__name__)
 CORS(app)
