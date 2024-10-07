@@ -13,6 +13,9 @@ load_dotenv()
 app = Flask(__name__)
 CORS(app)
 
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+TICKETMASTER_API_KEY = os.environ.get('TICKETMASTER_API_KEY')
+
 # Configure Flask-Session
 app.config['SECRET_KEY'] = os.urandom(24)
 app.config['SESSION_TYPE'] = 'filesystem'
