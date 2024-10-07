@@ -3,3 +3,4 @@ Flask-Session
 requests
 openai
 flask-cors
+gunicorn
